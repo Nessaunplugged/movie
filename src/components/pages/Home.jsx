@@ -2,7 +2,52 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 const API_KEY = import.meta.env.VITE_TMDB_API_KEY;
+const ACCESS_TOKEN = import.meta.env.VITE_TMDB_ACCESS_TOKEN;
 const BASE_URL = "https://api.themoviedb.org/3";
+
+// Get auth headers - prefer Bearer token over API key
+const getAuthHeaders = () => {
+  if (ACCESS_TOKEN) {
+    return {
+      'Authorization': `Bearer ${ACCESS_TOKEN}`,
+      'Content-Type': 'application/json'
+    };
+  }
+  return {};
+};
+
+// Get auth URL parameter
+const getAuthParam = () => {
+  return ACCESS_TOKEN ? '' : `api_key=${API_KEY}`;
+};
+
+// Test API authentication
+const testApiAuth = async () => {
+  if (!API_KEY && !ACCESS_TOKEN) {
+    console.error("❌ No API key or access token found in environment variables");
+    return false;
+  }
+  
+  try {
+    const authParam = getAuthParam();
+    const url = `${BASE_URL}/configuration${authParam ? `?${authParam}` : ''}`;
+    const response = await fetch(url, {
+      headers: getAuthHeaders()
+    });
+    
+    if (response.ok) {
+      console.log("✅ TMDB authentication is valid");
+      return true;
+    } else {
+      const errorData = await response.json().catch(() => ({}));
+      console.error("❌ TMDB authentication failed:", response.status, errorData.status_message || response.statusText);
+      return false;
+    }
+  } catch (error) {
+    console.error("❌ Error testing TMDB authentication:", error);
+    return false;
+  }
+};
 
 function Home() {
   const [movies, setMovies] = useState([]);
@@ -24,35 +69,70 @@ function Home() {
 
   const fetchMovies = (query = "", category = "") => {
     setLoading(true);
+    
+    if (!API_KEY && !ACCESS_TOKEN) {
+      console.error("❌ TMDB credentials missing! Check your .env file.");
+      setLoading(false);
+      return;
+    }
+    
+    const authParam = getAuthParam();
     let url;
     
     if (query) {
-      url = `${BASE_URL}/search/tv?api_key=${API_KEY}&query=${query}`;
+      url = `${BASE_URL}/search/tv?${authParam}&query=${encodeURIComponent(query)}`;
     } else if (category) {
       if (category === "korean" || category === "hindi" || category === "japanese" || category === "turkish" || category === "spanish") {
-        url = `${BASE_URL}/discover/tv?api_key=${API_KEY}&with_original_language=${category === "korean" ? "ko" : category === "hindi" ? "hi" : category === "japanese" ? "ja" : category === "turkish" ? "tr" : "es"}`;
+        const langMap = { korean: "ko", hindi: "hi", japanese: "ja", turkish: "tr", spanish: "es" };
+        url = `${BASE_URL}/discover/tv?${authParam}&with_original_language=${langMap[category]}`;
       } else {
         const genreMap = { action: "10759", comedy: "35", drama: "18" };
-        url = `${BASE_URL}/discover/tv?api_key=${API_KEY}&with_genres=${genreMap[category]}`;
+        url = `${BASE_URL}/discover/tv?${authParam}&with_genres=${genreMap[category]}`;
       }
     } else {
-      url = `${BASE_URL}/discover/tv?api_key=${API_KEY}&with_networks=213`;
+      url = `${BASE_URL}/discover/tv?${authParam}&with_networks=213`;
     }
     
-    fetch(url)
-      .then((res) => res.json())
+    // Clean URL if using Bearer token
+    if (ACCESS_TOKEN) {
+      url = url.replace('?&', '?').replace(/^([^?]+)\?$/, '$1');
+    }
+    
+    console.log("🔍 Fetching from:", url.replace(API_KEY || '', "***HIDDEN***"));
+    
+    fetch(url, {
+      headers: getAuthHeaders()
+    })
+      .then((res) => {
+        console.log("📡 Response:", res.status, res.statusText);
+        if (!res.ok) {
+          return res.json().then(errorData => {
+            throw new Error(`HTTP ${res.status}: ${errorData.status_message || res.statusText}`);
+          }).catch(() => {
+            throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+          });
+        }
+        return res.json();
+      })
       .then((data) => {
+        console.log("✅ Success! Found", data.results?.length || 0, "results");
         setMovies(data.results || []);
         setLoading(false);
       })
       .catch((error) => {
-        console.error("API Error:", error);
+        console.error("❌ API Error:", error.message);
         setLoading(false);
       });
   };
 
   useEffect(() => {
-    fetchMovies();
+    testApiAuth().then((isValid) => {
+      if (isValid) {
+        fetchMovies();
+      } else {
+        setLoading(false);
+      }
+    });
   }, []);
 
   const handleSearch = (e) => {
